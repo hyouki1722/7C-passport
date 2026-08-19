@@ -760,6 +760,12 @@
             <div class="bottom-slogan" id="mobile-slogan-container"></div>
 
             <button class="btn-export-global" onclick="CareApp.prepareAndPrint()">🖨️ 匯出給醫師看的報告 (PDF)</button>
+
+            <div class="grid-2" style="margin-top:0.5rem;">
+                <button class="btn-link" style="background:#334155; margin-bottom:0;" onclick="CareApp.exportBackup()">💾 匯出備份檔</button>
+                <button class="btn-link" style="background:#64748b; margin-bottom:0;" onclick="document.getElementById('restoreFileInput').click()">📂 匯入還原</button>
+            </div>
+            <input type="file" id="restoreFileInput" accept="application/json" style="display:none;" onchange="CareApp.importBackup(this.files[0])">
         </div>
     </div>
 
@@ -820,6 +826,17 @@
                 { main: "😊「保持心情愉快，是最好的抗癌良藥！」", sub: "👏 多給自己一點掌聲，您真的做得很棒！" },
                 { main: "🛌「休息是為了走更遠的路，別忘了疼愛自己。」", sub: "🤝 相信醫護團隊，相信自己，未來我們一起走！" }
             ];
+
+            // 安全性：將使用者輸入的文字進行 HTML 跳脫，避免儲存型 XSS（例如備註、其他癌別名稱等自由輸入欄位）
+            function escapeHtml(str) {
+                if (str === null || str === undefined) return '';
+                return String(str)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
 
             function checkEmpty(val) { return val === null || val === undefined || val.toString().trim() === ''; }
             function getTodayString() {
@@ -1066,7 +1083,7 @@
                         
                         <div class="form-row">
                             <label>目前設定癌症部位 ${isLocked ? '<span style="color:#dc2626; font-size:1rem;">(已鎖定)</span>' : ''}</label>
-                            <input type="text" class="form-input" disabled value="${displayCancerName}" style="background:#e2e8f0; color:#1e293b; font-weight:bold;">
+                            <input type="text" class="form-input" disabled value="${escapeHtml(displayCancerName)}" style="background:#e2e8f0; color:#1e293b; font-weight:bold;">
                         </div>
 
                         <div class="form-row"><label>癌細胞型態</label>
@@ -1112,7 +1129,7 @@
                                     <option value="其他" ${!isStandardMeta && metaVal ? 'selected' : ''}>其他</option>
                                 </select>
                                 <div id="meta-site-other-container" class="conditional-div" style="display:${!isStandardMeta && metaVal ? 'block' : 'none'}; margin-top:0.5rem;">
-                                    <input type="text" id="id-meta-site-other" class="form-input" placeholder="請輸入轉移部位..." value="${!isStandardMeta ? metaVal : ''}">
+                                    <input type="text" id="id-meta-site-other" class="form-input" placeholder="請輸入轉移部位..." value="${!isStandardMeta ? escapeHtml(metaVal) : ''}">
                                 </div>
                             </div>
                         </div>
@@ -1364,7 +1381,7 @@
                         ${seRecords.map((r, i) => `
                             <div class="history-card"><button class="btn-delete" onclick="CareApp.deleteRecord('se', ${i})">刪除</button>
                             <span class="history-date" onclick="CareApp.showDailyReport('${r.recordDate}')">📅 ${r.recordDate}</span>
-                            <div class="history-data">症狀: <b style="color:${r.sev === '嚴重 (需就醫)' ? 'red' : ''}">${r.symp}</b> (${r.sev})<br>備註: ${r.notes || '無'}</div></div>
+                            <div class="history-data">症狀: <b style="color:${r.sev === '嚴重 (需就醫)' ? 'red' : ''}">${escapeHtml(r.symp)}</b> (${escapeHtml(r.sev)})<br>備註: ${escapeHtml(r.notes) || '無'}</div></div>
                         `).join('')}
                     </div>`;
                 }
@@ -1466,7 +1483,7 @@
                 }
                 if (daySe.length > 0) {
                     html += `<div class="modal-section"><h4>🤢 副作用</h4>`;
-                    daySe.forEach(r => html += `<p style="font-size:1.1rem;">症狀: ${r.symp} (${r.sev})<br>備註: ${r.notes || '無'}</p>`);
+                    daySe.forEach(r => html += `<p style="font-size:1.1rem;">症狀: ${escapeHtml(r.symp)} (${escapeHtml(r.sev)})<br>備註: ${escapeHtml(r.notes) || '無'}</p>`);
                     html += `</div>`;
                 }
 
@@ -1477,13 +1494,84 @@
 
             function closeModal() { document.getElementById('dailyModal').style.display = 'none'; }
 
-            function formatLab(val, min, max) {
+            function formatLab(val, min, max, key) {
                 if (!val || val === '-') return '-';
                 let v = parseFloat(val);
-                if (isNaN(v)) return val;
-                if (min !== null && v < min) return `<span style="color: #2563eb; font-weight: bold;">${val} ↓</span>`;
-                if (max !== null && v > max) return `<span style="color: #dc2626; font-weight: bold;">${val} ↑</span>`;
-                return val;
+                if (isNaN(v)) return escapeHtml(val);
+                const safeVal = escapeHtml(val);
+                // 危急值(panic value)：若此項目有定義臨床危急標準，且數值達標，特別以紅底白字強調
+                const limits = key ? CLINICAL_LAB_LIMITS[key] : null;
+                if (limits && ((limits.panicMin !== null && v <= limits.panicMin) || (limits.panicMax !== null && v >= limits.panicMax))) {
+                    return `<span style="background:#dc2626; color:#fff; font-weight:bold; padding:1px 5px; border-radius:4px;">🚨 ${safeVal}</span>`;
+                }
+                if (min !== null && v < min) return `<span style="color: #2563eb; font-weight: bold;">${safeVal} ↓</span>`;
+                if (max !== null && v > max) return `<span style="color: #dc2626; font-weight: bold;">${safeVal} ↑</span>`;
+                return safeVal;
+            }
+
+            // ================= 資料備份與還原 =================
+            // 匯出：將所有紀錄打包成 JSON 檔並觸發下載，供病患自行保存或換裝置時匯入
+            function exportBackup() {
+                try {
+                    const backup = {
+                        appName: '台東馬偕7C護照',
+                        exportedAt: new Date().toISOString(),
+                        idCardState: idCardState,
+                        labRecords: labRecords,
+                        seRecords: seRecords
+                    };
+                    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `7C護照備份_${getTodayString()}.json`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                } catch (err) {
+                    alert('匯出備份時發生錯誤，請稍後再試。');
+                    console.error(err);
+                }
+            }
+
+            // 匯入：讀取先前匯出的 JSON 備份檔，還原到目前裝置（會詢問是否覆蓋現有資料）
+            function importBackup(file) {
+                if (!file) return;
+                if (!confirm('匯入備份將會「覆蓋」目前裝置上的所有資料，確定要繼續嗎？\n(建議先匯出目前資料備份，以免不慎覆蓋)')) {
+                    document.getElementById('restoreFileInput').value = '';
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = function (e) {
+                    try {
+                        const data = JSON.parse(e.target.result);
+                        if (!data || typeof data !== 'object') throw new Error('格式錯誤');
+
+                        idCardState = (data.idCardState && typeof data.idCardState === 'object') ? data.idCardState : {};
+                        labRecords = Array.isArray(data.labRecords) ? data.labRecords : [];
+                        seRecords = Array.isArray(data.seRecords) ? data.seRecords : [];
+
+                        if (idCardState.lockedOncology) {
+                            currentOncology = idCardState.lockedOncology;
+                            if (currentOncology === 'other') otherCancerName = idCardState.site || '';
+                        }
+
+                        saveDataToLocal();
+                        alert('✅ 備份還原成功！頁面即將重新整理。');
+                        window.location.reload();
+                    } catch (err) {
+                        alert('⚠️ 匯入失敗，檔案格式不正確，請確認選擇的是本 App 匯出的備份檔。');
+                        console.error(err);
+                    } finally {
+                        document.getElementById('restoreFileInput').value = '';
+                    }
+                };
+                reader.onerror = function () {
+                    alert('讀取檔案時發生錯誤，請稍後再試。');
+                    document.getElementById('restoreFileInput').value = '';
+                };
+                reader.readAsText(file);
             }
 
             // PDF 匯出功能與防呆跳出提示
@@ -1496,10 +1584,10 @@
                     html += `<div class="print-section"><div class="print-section-title">🪪 癌症身分證 (了解它)</div>`;
                     if (Object.keys(idCardState).length > 0) {
                         html += `<table class="print-table info-table">
-                            <tr><th>報告日期</th><td>${idCardState.date || '-'}</td><th>部位 / 期別</th><td>${idCardState.site || '-'} (${idCardState.stage || '-'})</td></tr>
-                            <tr><th>細胞型態</th><td>${idCardState.type || '-'}</td><th>腫瘤大小</th><td>${idCardState.size || '-'} cm</td></tr>
-                            <tr><th>細胞分化程度</th><td>${idCardState.grade || '-'}</td><th>Ki 67 指數</th><td>${idCardState.ki67 || '-'}</td></tr>
-                            <tr><th>淋巴轉移</th><td>${idCardState.lymph || '-'}</td><th>遠處轉移</th><td>${idCardState.meta || '-'}</td></tr>
+                            <tr><th>報告日期</th><td>${escapeHtml(idCardState.date) || '-'}</td><th>部位 / 期別</th><td>${escapeHtml(idCardState.site) || '-'} (${escapeHtml(idCardState.stage) || '-'})</td></tr>
+                            <tr><th>細胞型態</th><td>${escapeHtml(idCardState.type) || '-'}</td><th>腫瘤大小</th><td>${escapeHtml(idCardState.size) || '-'} cm</td></tr>
+                            <tr><th>細胞分化程度</th><td>${escapeHtml(idCardState.grade) || '-'}</td><th>Ki 67 指數</th><td>${escapeHtml(idCardState.ki67) || '-'}</td></tr>
+                            <tr><th>淋巴轉移</th><td>${escapeHtml(idCardState.lymph) || '-'}</td><th>遠處轉移</th><td>${escapeHtml(idCardState.meta) || '-'}</td></tr>
                         </table>`;
                     } else { html += `<p>尚未填寫。</p>`; }
                     html += `</div>`;
@@ -1535,15 +1623,15 @@
                         html += `<table class="print-table">
                             <tr><th colspan="2" style="background:#fff;">檢查日期</th>${displayLabs.map(r => `<th>${r.recordDate}</th>`).join('')}</tr>
                             <tr><th>項目</th><th>正常值</th>${displayLabs.map(r => `<th>檢查結果</th>`).join('')}</tr>
-                            <tr><td>WBC/白血球</td><td>3.54~9.06 10³/uL</td>${displayLabs.map(r => `<td>${formatLab(r.wbc, 3.54, 9.06)}</td>`).join('')}</tr>
-                            <tr><td>ANC/嗜中性白血球</td><td>> 1500 /mm³</td>${displayLabs.map(r => `<td>${formatLab(r.anc, 1500, null)}</td>`).join('')}</tr>
-                            <tr><td>Hb/血色素</td><td>男13.5~17.2<br>女10.8~14.9 g/dL</td>${displayLabs.map(r => `<td>${formatLab(r.hb, 10.8, 17.2)}</td>`).join('')}</tr>
-                            <tr><td>Platelet/血小板</td><td>148~361 10³/uL</td>${displayLabs.map(r => `<td>${formatLab(r.plt, 148, 361)}</td>`).join('')}</tr>
+                            <tr><td>WBC/白血球</td><td>3.54~9.06 10³/uL</td>${displayLabs.map(r => `<td>${formatLab(r.wbc, 3.54, 9.06, 'wbc')}</td>`).join('')}</tr>
+                            <tr><td>ANC/嗜中性白血球</td><td>> 1500 /mm³</td>${displayLabs.map(r => `<td>${formatLab(r.anc, 1500, null, 'anc')}</td>`).join('')}</tr>
+                            <tr><td>Hb/血色素</td><td>男13.5~17.2<br>女10.8~14.9 g/dL</td>${displayLabs.map(r => `<td>${formatLab(r.hb, 10.8, 17.2, 'hb')}</td>`).join('')}</tr>
+                            <tr><td>Platelet/血小板</td><td>148~361 10³/uL</td>${displayLabs.map(r => `<td>${formatLab(r.plt, 148, 361, 'plt')}</td>`).join('')}</tr>
                             <tr><th colspan="${2 + displayLabs.length}" style="background:#e5e7eb;">肝功能與腎功能</th></tr>
-                            <tr><td>SGOT/肝功能</td><td>8~37 U/L</td>${displayLabs.map(r => `<td>${formatLab(r.got, 8, 37)}</td>`).join('')}</tr>
-                            <tr><td>SGPT/肝功能</td><td>0~41 U/L</td>${displayLabs.map(r => `<td>${formatLab(r.gpt, 0, 41)}</td>`).join('')}</tr>
+                            <tr><td>SGOT/肝功能</td><td>8~37 U/L</td>${displayLabs.map(r => `<td>${formatLab(r.got, 8, 37, 'got')}</td>`).join('')}</tr>
+                            <tr><td>SGPT/肝功能</td><td>0~41 U/L</td>${displayLabs.map(r => `<td>${formatLab(r.gpt, 0, 41, 'gpt')}</td>`).join('')}</tr>
                             <tr><td>BUN/腎功能</td><td>7~25 mg/dL</td>${displayLabs.map(r => `<td>${formatLab(r.bun, 7, 25)}</td>`).join('')}</tr>
-                            <tr><td>Cr/腎功能</td><td>0.6~1.3 mg/dL</td>${displayLabs.map(r => `<td>${formatLab(r.cr, 0.6, 1.3)}</td>`).join('')}</tr>
+                            <tr><td>Cr/腎功能</td><td>0.6~1.3 mg/dL</td>${displayLabs.map(r => `<td>${formatLab(r.cr, 0.6, 1.3, 'cr')}</td>`).join('')}</tr>
                             <tr><td>LDH/乳酸脫氫酶</td><td>140~271 U/L</td>${displayLabs.map(r => `<td>${formatLab(r.ldh, 140, 271)}</td>`).join('')}</tr>
                             <tr><td>ALP/鹼性磷酸酶</td><td>34~104 U/L</td>${displayLabs.map(r => `<td>${formatLab(r.alp, 34, 104)}</td>`).join('')}</tr>
                             <tr><th colspan="${2 + displayLabs.length}" style="background:#e5e7eb;">腫瘤標記 (癌指數)</th></tr>
@@ -1563,7 +1651,7 @@
                     if (seRecords.length > 0) {
                         html += `<table class="print-table"><tr><th>發生日期</th><th>症狀</th><th>嚴重程度</th><th>備註說明</th></tr>`;
                         const sortedSe = seRecords.slice().sort((a, b) => new Date(a.recordDate) - new Date(b.recordDate));
-                        sortedSe.forEach(r => html += `<tr><td>${r.recordDate}</td><td>${r.symp}</td><td>${r.sev}</td><td>${r.notes || '-'}</td></tr>`);
+                        sortedSe.forEach(r => html += `<tr><td>${escapeHtml(r.recordDate)}</td><td>${escapeHtml(r.symp)}</td><td>${escapeHtml(r.sev)}</td><td>${escapeHtml(r.notes) || '-'}</td></tr>`);
                         html += `</table>`;
                     } else { html += `<p>無副作用紀錄。</p>`; }
                     html += `</div>`;
@@ -1608,7 +1696,9 @@
                 deleteRecord: deleteRecord,
                 showDailyReport: showDailyReport,
                 closeModal: closeModal,
-                prepareAndPrint: prepareAndPrint
+                prepareAndPrint: prepareAndPrint,
+                exportBackup: exportBackup,
+                importBackup: importBackup
             };
 
         })();
